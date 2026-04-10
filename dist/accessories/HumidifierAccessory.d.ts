@@ -23,6 +23,9 @@ interface DreoState {
     rgblevel: {
         state: string | number;
     };
+    rgbcolor?: {
+        state: number;
+    };
     foglevel: {
         state: number;
     };
@@ -52,6 +55,9 @@ export declare class HumidifierAccessory extends BaseAccessory {
     private fogHot;
     private ledLevel;
     private rgbLevel;
+    private rgbColor;
+    private rgbHue;
+    private rgbSaturation;
     private wrong;
     private manualFogLevel;
     private targetHumAutoLevel;
@@ -77,8 +83,13 @@ export declare class HumidifierAccessory extends BaseAccessory {
     getTargetFogLevel(): number;
     getRGBLightOn(): boolean;
     setRGBLightOn(value: unknown): void;
-    getRGBLightBrightness(): number;
-    setRGBLightBrightness(value: unknown): void;
+    getRGBHue(): number;
+    setRGBHue(value: unknown): void;
+    getRGBSaturation(): number;
+    setRGBSaturation(value: unknown): void;
+    private sendRGBColor;
+    private static rgbToHueSat;
+    private static hueSatToRgb;
     private updateCurrentHumidifierState;
     /**
      * 0 HomeKit: Auto - Dero: Manual (0)

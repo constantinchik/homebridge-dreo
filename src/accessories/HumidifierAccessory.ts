@@ -14,6 +14,7 @@ interface DreoStateReport {
   rhsleeplevel?: number;  // Target humidity level in sleep mode
   ledlevel?: number;      // LED indicator level 0-2 [off, low, high]
   rgblevel?: string | number;  // RGB display level 0-2 [off, low, high]
+  rgbcolor?: number;      // RGB color as packed 24-bit integer (0xRRGGBB)
   muteon?: boolean;       // Beep on/off
   wrong?: number;         // Error code 0-1 [0: no error, 1: no water]
   worktime?: number;      // Work time in minutes after last cleaning
@@ -36,6 +37,7 @@ interface DreoState {
   hotfogon?: {state: boolean};  // Optional - not available on all models
   ledlevel: {state: number};
   rgblevel: {state: string | number};  // Can be string or number depending on model
+  rgbcolor?: {state: number};  // RGB color as packed 24-bit integer
   foglevel: {state: number};
   rhautolevel: {state: number};
   rhsleeplevel: {state: number};
@@ -62,6 +64,9 @@ export class HumidifierAccessory extends BaseAccessory {
   private fogHot: boolean;    // hotfogon
   private ledLevel: number;   // ledlevel 0-2   [off, low, high]
   private rgbLevel: string;   // rgblevel 0-2   [off, low, high]
+  private rgbColor: number;   // rgbcolor - packed 24-bit RGB (0xRRGGBB)
+  private rgbHue: number;     // HomeKit hue (0-360)
+  private rgbSaturation: number; // HomeKit saturation (0-100)
   private wrong: number;      // wrong 0-1      [0: no error, 1: no water]
 
   private manualFogLevel: number;         // foglevel 0-6   [1-, 1, 2-, 2, 3-, 3]
@@ -87,6 +92,10 @@ export class HumidifierAccessory extends BaseAccessory {
     this.fogHot = state.hotfogon?.state ?? false;
     this.ledLevel = state.ledlevel?.state ?? 0;
     this.rgbLevel = String(state.rgblevel?.state ?? '0');  // Convert to string for consistency
+    this.rgbColor = state.rgbcolor?.state ?? 0xFFFFFF;
+    const [h, s] = HumidifierAccessory.rgbToHueSat(this.rgbColor);
+    this.rgbHue = h;
+    this.rgbSaturation = s;
     this.wrong = state.wrong?.state ?? 0;
     this.manualFogLevel = state.foglevel?.state ?? 0;
     // Ensure humidity levels are within HomeKit valid range
@@ -118,10 +127,12 @@ export class HumidifierAccessory extends BaseAccessory {
     this.rgbLightService.getCharacteristic(this.platform.Characteristic.On)
       .onGet(this.getRGBLightOn.bind(this))
       .onSet(this.setRGBLightOn.bind(this));
-    this.rgbLightService.getCharacteristic(this.platform.Characteristic.Brightness)
-      .setProps({ minValue: 0, maxValue: 100, minStep: 50 })
-      .onGet(this.getRGBLightBrightness.bind(this))
-      .onSet(this.setRGBLightBrightness.bind(this));
+    this.rgbLightService.getCharacteristic(this.platform.Characteristic.Hue)
+      .onGet(this.getRGBHue.bind(this))
+      .onSet(this.setRGBHue.bind(this));
+    this.rgbLightService.getCharacteristic(this.platform.Characteristic.Saturation)
+      .onGet(this.getRGBSaturation.bind(this))
+      .onSet(this.setRGBSaturation.bind(this));
 
     // ON / OFF
     // Register handlers for the Humidifier Active characteristic
@@ -435,7 +446,7 @@ export class HumidifierAccessory extends BaseAccessory {
     return this.on ? this.manualFogLevel : 0;
   }
 
-  // RGB Light: rgblevel 0=off, 1=low, 2=high
+  // RGB Light control
   getRGBLightOn(): boolean {
     return parseInt(this.rgbLevel) > 0;
   }
@@ -444,35 +455,90 @@ export class HumidifierAccessory extends BaseAccessory {
     this.platform.log.debug('Triggered SET RGB Light On: %s', value);
     const on = Boolean(value);
     if (on && parseInt(this.rgbLevel) === 0) {
-      this.rgbLevel = '2'; // Default to high when turning on
-      this.platform.webHelper.control(this.sn, { 'rgblevel': 2 });
+      this.rgbLevel = '1';
+      this.platform.webHelper.control(this.sn, { 'rgblevel': 1 });
     } else if (!on) {
       this.rgbLevel = '0';
       this.platform.webHelper.control(this.sn, { 'rgblevel': 0 });
     }
-    this.rgbLightService.updateCharacteristic(this.platform.Characteristic.Brightness, this.getRGBLightBrightness());
   }
 
-  getRGBLightBrightness(): number {
-    // Map rgblevel 0->0%, 1->50%, 2->100%
-    return parseInt(this.rgbLevel) * 50;
+  getRGBHue(): number {
+    return this.rgbHue;
   }
 
-  setRGBLightBrightness(value: unknown): void {
-    this.platform.log.debug('Triggered SET RGB Light Brightness: %s', value);
-    const brightness = Number(value);
-    // Map 0%->0, 1-50%->1, 51-100%->2
-    let level: number;
-    if (brightness === 0) {
-      level = 0;
-    } else if (brightness <= 50) {
-      level = 1;
-    } else {
-      level = 2;
+  setRGBHue(value: unknown): void {
+    this.platform.log.debug('Triggered SET RGB Hue: %s', value);
+    this.rgbHue = Number(value);
+    this.sendRGBColor();
+  }
+
+  getRGBSaturation(): number {
+    return this.rgbSaturation;
+  }
+
+  setRGBSaturation(value: unknown): void {
+    this.platform.log.debug('Triggered SET RGB Saturation: %s', value);
+    this.rgbSaturation = Number(value);
+    this.sendRGBColor();
+  }
+
+  private sendRGBColor(): void {
+    const rgb = HumidifierAccessory.hueSatToRgb(this.rgbHue, this.rgbSaturation);
+    this.rgbColor = rgb;
+    this.platform.log.debug('Sending rgbcolor: %s (0x%s)', rgb, rgb.toString(16).padStart(6, '0'));
+    this.platform.webHelper.control(this.sn, { 'rgbcolor': rgb });
+    // Ensure light is on when setting color
+    if (parseInt(this.rgbLevel) === 0) {
+      this.rgbLevel = '1';
+      this.platform.webHelper.control(this.sn, { 'rgblevel': 1 });
+      this.rgbLightService.updateCharacteristic(this.platform.Characteristic.On, true);
     }
-    this.rgbLevel = String(level);
-    this.platform.webHelper.control(this.sn, { 'rgblevel': level });
-    this.rgbLightService.updateCharacteristic(this.platform.Characteristic.On, level > 0);
+  }
+
+  // Convert packed 24-bit RGB integer to HomeKit [hue (0-360), saturation (0-100)]
+  private static rgbToHueSat(rgb: number): [number, number] {
+    const r = ((rgb >> 16) & 0xFF) / 255;
+    const g = ((rgb >> 8) & 0xFF) / 255;
+    const b = (rgb & 0xFF) / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const d = max - min;
+    let h = 0;
+    const s = max === 0 ? 0 : (d / max) * 100;
+    if (d !== 0) {
+      if (max === r) {
+        h = 60 * (((g - b) / d) % 6);
+      } else if (max === g) {
+        h = 60 * ((b - r) / d + 2);
+      } else {
+        h = 60 * ((r - g) / d + 4);
+      }
+      if (h < 0) {
+        h += 360;
+      }
+    }
+    return [Math.round(h), Math.round(s)];
+  }
+
+  // Convert HomeKit hue (0-360) + saturation (0-100) to packed 24-bit RGB integer
+  private static hueSatToRgb(hue: number, saturation: number): number {
+    const s = saturation / 100;
+    const v = 1; // Full brightness since device has no brightness control
+    const c = v * s;
+    const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+    const m = v - c;
+    let r = 0, g = 0, b = 0;
+    if (hue < 60) { r = c; g = x; }
+    else if (hue < 120) { r = x; g = c; }
+    else if (hue < 180) { g = c; b = x; }
+    else if (hue < 240) { g = x; b = c; }
+    else if (hue < 300) { r = x; b = c; }
+    else { r = c; b = x; }
+    const ri = Math.round((r + m) * 255);
+    const gi = Math.round((g + m) * 255);
+    const bi = Math.round((b + m) * 255);
+    return (ri << 16) | (gi << 8) | bi;
   }
 
   private updateCurrentHumidifierState() {
@@ -582,7 +648,15 @@ export class HumidifierAccessory extends BaseAccessory {
         this.rgbLevel = String(reported.rgblevel ?? this.rgbLevel);
         this.platform.log.debug('Humidifier rgblevel: %s', this.rgbLevel);
         this.rgbLightService.updateCharacteristic(this.platform.Characteristic.On, this.getRGBLightOn());
-        this.rgbLightService.updateCharacteristic(this.platform.Characteristic.Brightness, this.getRGBLightBrightness());
+        break;
+      case 'rgbcolor':
+        this.rgbColor = reported.rgbcolor ?? this.rgbColor;
+        const [hue, sat] = HumidifierAccessory.rgbToHueSat(this.rgbColor);
+        this.rgbHue = hue;
+        this.rgbSaturation = sat;
+        this.platform.log.debug('Humidifier rgbcolor: 0x%s -> H:%s S:%s', this.rgbColor.toString(16).padStart(6, '0'), hue, sat);
+        this.rgbLightService.updateCharacteristic(this.platform.Characteristic.Hue, this.rgbHue);
+        this.rgbLightService.updateCharacteristic(this.platform.Characteristic.Saturation, this.rgbSaturation);
         break;
       case 'filtertime':
         const filterLife = reported.filtertime ?? 100;
