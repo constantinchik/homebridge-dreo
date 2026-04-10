@@ -62,13 +62,11 @@ class HumidifierAccessory extends BaseAccessory_1.BaseAccessory {
             this.accessory.addService(this.platform.Service.Lightbulb, 'Night Light');
         this.rgbLightService.setCharacteristic(this.platform.Characteristic.ConfiguredName, 'Night Light');
         // Remove cached Brightness/ColorTemperature if present from earlier versions
-        const brightnessChar = this.rgbLightService.getCharacteristic(this.platform.Characteristic.Brightness);
-        if (brightnessChar) {
-            this.rgbLightService.removeCharacteristic(brightnessChar);
+        if (this.rgbLightService.testCharacteristic(this.platform.Characteristic.Brightness)) {
+            this.rgbLightService.removeCharacteristic(this.rgbLightService.getCharacteristic(this.platform.Characteristic.Brightness));
         }
-        const ctChar = this.rgbLightService.getCharacteristic(this.platform.Characteristic.ColorTemperature);
-        if (ctChar) {
-            this.rgbLightService.removeCharacteristic(ctChar);
+        if (this.rgbLightService.testCharacteristic(this.platform.Characteristic.ColorTemperature)) {
+            this.rgbLightService.removeCharacteristic(this.rgbLightService.getCharacteristic(this.platform.Characteristic.ColorTemperature));
         }
         this.rgbLightService.getCharacteristic(this.platform.Characteristic.On)
             .onGet(this.getRGBLightOn.bind(this))
@@ -371,9 +369,8 @@ class HumidifierAccessory extends BaseAccessory_1.BaseAccessory {
         this.platform.log.debug('Triggered SET RGB Light On: %s', value);
         const on = Boolean(value);
         if (on) {
-            this.rgbLevel = '1';
-            // Send both rgblevel and current color to ensure light turns on with correct color
-            this.platform.webHelper.control(this.sn, { 'rgblevel': 1, 'rgbcolor': this.rgbColor });
+            this.rgbLevel = '2';
+            this.platform.webHelper.control(this.sn, { 'rgblevel': 2 });
         }
         else {
             this.rgbLevel = '0';
@@ -404,12 +401,13 @@ class HumidifierAccessory extends BaseAccessory_1.BaseAccessory {
         this.rgbColorDebounce = setTimeout(() => {
             this.rgbColor = HumidifierAccessory.hsToRgb(this.rgbHue, this.rgbSaturation);
             this.platform.log.debug('Sending rgbcolor: 0x%s', this.rgbColor.toString(16).padStart(6, '0'));
-            // Turn on and set color in one command
+            // Turn on if off
             if (parseInt(this.rgbLevel) === 0) {
-                this.rgbLevel = '1';
+                this.rgbLevel = '2';
+                this.platform.webHelper.control(this.sn, { 'rgblevel': 2 });
                 this.rgbLightService.updateCharacteristic(this.platform.Characteristic.On, true);
             }
-            this.platform.webHelper.control(this.sn, { 'rgblevel': 1, 'rgbcolor': this.rgbColor });
+            this.platform.webHelper.control(this.sn, { 'rgbcolor': this.rgbColor });
         }, 100);
     }
     // RGB <-> HS conversions (value fixed at 1.0 — device has no brightness)
