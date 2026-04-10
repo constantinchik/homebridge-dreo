@@ -123,13 +123,13 @@ export class HumidifierAccessory extends BaseAccessory {
     // Get the Switch service if it exists, otherwise create a new Switch service
     this.sleepSwitchService = this.accessory.getServiceById(this.platform.Service.Switch, 'SleepMode') ||
       this.accessory.addService(this.platform.Service.Switch, 'Sleep Mode', 'SleepMode');
-    this.sleepSwitchService.setCharacteristic(this.platform.Characteristic.Name, 'Sleep Mode');
+    this.sleepSwitchService.setCharacteristic(this.platform.Characteristic.ConfiguredName, 'Sleep Mode');
 
     // Only create Hot Fog switch if the device supports it (some models like HM311S don't have this feature)
     if (state.hotfogon !== undefined) {
       this.hotFogSwitchService = this.accessory.getServiceById(this.platform.Service.Switch, 'HotFog') ||
         this.accessory.addService(this.platform.Service.Switch, 'Warm Mist', 'HotFog');
-      this.hotFogSwitchService.setCharacteristic(this.platform.Characteristic.Name, 'Warm Mist');
+      this.hotFogSwitchService.setCharacteristic(this.platform.Characteristic.ConfiguredName, 'Warm Mist');
     }
 
     // Remove cached Lightbulb service from previous version if present
@@ -143,7 +143,7 @@ export class HumidifierAccessory extends BaseAccessory {
       const subtype = `RGBColor_${name}`;
       const service = this.accessory.getServiceById(this.platform.Service.Switch, subtype) ||
         this.accessory.addService(this.platform.Service.Switch, `Light: ${name}`, subtype);
-      service.setCharacteristic(this.platform.Characteristic.Name, `Light: ${name}`);
+      service.setCharacteristic(this.platform.Characteristic.ConfiguredName, `Light: ${name}`);
       service.getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => this.getColorPresetOn(name))
         .onSet((value) => this.setColorPresetOn(name, value));
