@@ -52,6 +52,7 @@ export class HumidifierAccessory extends BaseAccessory {
   private readonly humidityService: Service;
   private readonly sleepSwitchService: Service;
   private readonly hotFogSwitchService?: Service;  // Optional - not all models support hot fog
+  private readonly rgbLightService: Service;
 
   // Cached copy of latest device states
   private on: boolean;        // poweron
@@ -110,6 +111,17 @@ export class HumidifierAccessory extends BaseAccessory {
       this.hotFogSwitchService = this.accessory.getServiceById(this.platform.Service.Switch, 'HotFog') ||
         this.accessory.addService(this.platform.Service.Switch, 'Warm Mist', 'HotFog');
     }
+
+    // RGB Night Light service
+    this.rgbLightService = this.accessory.getService(this.platform.Service.Lightbulb) ||
+      this.accessory.addService(this.platform.Service.Lightbulb, 'Night Light');
+    this.rgbLightService.getCharacteristic(this.platform.Characteristic.On)
+      .onGet(this.getRGBLightOn.bind(this))
+      .onSet(this.setRGBLightOn.bind(this));
+    this.rgbLightService.getCharacteristic(this.platform.Characteristic.Brightness)
+      .setProps({ minValue: 0, maxValue: 100, minStep: 50 })
+      .onGet(this.getRGBLightBrightness.bind(this))
+      .onSet(this.setRGBLightBrightness.bind(this));
 
     // ON / OFF
     // Register handlers for the Humidifier Active characteristic
@@ -422,6 +434,46 @@ export class HumidifierAccessory extends BaseAccessory {
     return this.on ? this.manualFogLevel : 0;
   }
 
+  // RGB Light: rgblevel 0=off, 1=low, 2=high
+  getRGBLightOn(): boolean {
+    return parseInt(this.rgbLevel) > 0;
+  }
+
+  setRGBLightOn(value: unknown): void {
+    this.platform.log.debug('Triggered SET RGB Light On: %s', value);
+    const on = Boolean(value);
+    if (on && parseInt(this.rgbLevel) === 0) {
+      this.rgbLevel = '2'; // Default to high when turning on
+      this.platform.webHelper.control(this.sn, { 'rgblevel': 2 });
+    } else if (!on) {
+      this.rgbLevel = '0';
+      this.platform.webHelper.control(this.sn, { 'rgblevel': 0 });
+    }
+    this.rgbLightService.updateCharacteristic(this.platform.Characteristic.Brightness, this.getRGBLightBrightness());
+  }
+
+  getRGBLightBrightness(): number {
+    // Map rgblevel 0->0%, 1->50%, 2->100%
+    return parseInt(this.rgbLevel) * 50;
+  }
+
+  setRGBLightBrightness(value: unknown): void {
+    this.platform.log.debug('Triggered SET RGB Light Brightness: %s', value);
+    const brightness = Number(value);
+    // Map 0%->0, 1-50%->1, 51-100%->2
+    let level: number;
+    if (brightness === 0) {
+      level = 0;
+    } else if (brightness <= 50) {
+      level = 1;
+    } else {
+      level = 2;
+    }
+    this.rgbLevel = String(level);
+    this.platform.webHelper.control(this.sn, { 'rgblevel': level });
+    this.rgbLightService.updateCharacteristic(this.platform.Characteristic.On, level > 0);
+  }
+
   private updateCurrentHumidifierState() {
     // Update HomeKit current humidifier state based on power and suspend states
     this.currState = this.on ? (this.suspended ? 1 : 2) : 0;
@@ -524,6 +576,12 @@ export class HumidifierAccessory extends BaseAccessory {
         } else {
           this.humidifierService.updateCharacteristic(this.platform.Characteristic.WaterLevel, 100);
         }
+        break;
+      case 'rgblevel':
+        this.rgbLevel = String(reported.rgblevel ?? this.rgbLevel);
+        this.platform.log.debug('Humidifier rgblevel: %s', this.rgbLevel);
+        this.rgbLightService.updateCharacteristic(this.platform.Characteristic.On, this.getRGBLightOn());
+        this.rgbLightService.updateCharacteristic(this.platform.Characteristic.Brightness, this.getRGBLightBrightness());
         break;
       case 'filtertime':
         const filterLife = reported.filtertime ?? 100;
