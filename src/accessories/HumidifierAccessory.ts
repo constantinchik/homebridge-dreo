@@ -113,7 +113,7 @@ export class HumidifierAccessory extends BaseAccessory {
     // Get the Switch service if it exists, otherwise create a new Switch service
     this.sleepSwitchService = this.accessory.getServiceById(this.platform.Service.Switch, 'SleepMode') ||
       this.accessory.addService(this.platform.Service.Switch, 'Sleep Mode', 'SleepMode');
-    this.sleepSwitchService.setCharacteristic(this.platform.Characteristic.ConfiguredName, 'Sleep Mode');
+    this.sleepSwitchService.setCharacteristic(this.platform.Characteristic.ConfiguredName, 'Humidifier: Sleep Mode');
 
     // Only create Hot Fog switch if the device supports it (some models like HM311S don't have this feature)
     if (state.hotfogon !== undefined) {
@@ -133,7 +133,7 @@ export class HumidifierAccessory extends BaseAccessory {
     // RGB Night Light — Lightbulb with Hue + Saturation, no Brightness/ColorTemperature
     this.rgbLightService = this.accessory.getService(this.platform.Service.Lightbulb) ||
       this.accessory.addService(this.platform.Service.Lightbulb, 'Night Light');
-    this.rgbLightService.setCharacteristic(this.platform.Characteristic.ConfiguredName, 'Night Light');
+    this.rgbLightService.setCharacteristic(this.platform.Characteristic.ConfiguredName, 'Humidifier: Light');
     // Remove cached Brightness/ColorTemperature if present from earlier versions
     if (this.rgbLightService.testCharacteristic(this.platform.Characteristic.Brightness)) {
       this.rgbLightService.removeCharacteristic(
