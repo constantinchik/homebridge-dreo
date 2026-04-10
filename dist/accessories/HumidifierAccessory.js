@@ -161,7 +161,6 @@ class HumidifierAccessory extends BaseAccessory_1.BaseAccessory {
                 data = JSON.parse(message.data);
                 if (data.devicesn === accessory.context.device.sn) {
                     if (data.method && ['control-report', 'control-reply', 'report'].includes(data.method) && data.reported) {
-                        this.platform.log.info('Humidifier WS reported: %s', JSON.stringify(data.reported));
                         Object.keys(data.reported).forEach(key => this.processReportedKey(key, data.reported));
                     }
                 }
