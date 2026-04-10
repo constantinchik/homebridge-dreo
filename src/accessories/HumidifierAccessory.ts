@@ -54,19 +54,7 @@ export class HumidifierAccessory extends BaseAccessory {
   private readonly humidityService: Service;
   private readonly sleepSwitchService: Service;
   private readonly hotFogSwitchService?: Service;  // Optional - not all models support hot fog
-  private readonly rgbColorSwitches: Map<string, Service> = new Map();
-
-  // RGB color presets: name -> packed 24-bit RGB
-  private static readonly RGB_PRESETS: Record<string, number> = {
-    'Red': 0xFF0000,
-    'Orange': 0xFF8800,
-    'Yellow': 0xFFFF00,
-    'Green': 0x00FF00,
-    'Cyan': 0x00FFFF,
-    'Blue': 0x0000FF,
-    'Purple': 0x8800FF,
-    'Pink': 0xFF00FF,
-  };
+  private readonly rgbLightService: Service;
 
   // Cached copy of latest device states
   private on: boolean;        // poweron
@@ -77,7 +65,9 @@ export class HumidifierAccessory extends BaseAccessory {
   private ledLevel: number;   // ledlevel 0-2   [off, low, high]
   private rgbLevel: string;   // rgblevel 0-2   [off, low, high]
   private rgbColor: number;   // rgbcolor - packed 24-bit RGB (0xRRGGBB)
-  private activeColorPreset: string | null = null; // Currently active preset name
+  private rgbHue: number = 0;
+  private rgbSaturation: number = 100;
+  private rgbColorDebounce: ReturnType<typeof setTimeout> | null = null;
   private wrong: number;      // wrong 0-1      [0: no error, 1: no water]
 
   private manualFogLevel: number;         // foglevel 0-6   [1-, 1, 2-, 2, 3-, 3]
@@ -103,8 +93,8 @@ export class HumidifierAccessory extends BaseAccessory {
     this.fogHot = state.hotfogon?.state ?? false;
     this.ledLevel = state.ledlevel?.state ?? 0;
     this.rgbLevel = String(state.rgblevel?.state ?? '0');  // Convert to string for consistency
-    this.rgbColor = state.rgbcolor?.state ?? 0xFFFFFF;
-    this.activeColorPreset = HumidifierAccessory.findClosestPreset(this.rgbColor);
+    this.rgbColor = state.rgbcolor?.state ?? 0xFF0000;
+    [this.rgbHue, this.rgbSaturation] = HumidifierAccessory.rgbToHS(this.rgbColor);
     this.wrong = state.wrong?.state ?? 0;
     this.manualFogLevel = state.foglevel?.state ?? 0;
     // Ensure humidity levels are within HomeKit valid range
@@ -132,23 +122,36 @@ export class HumidifierAccessory extends BaseAccessory {
       this.hotFogSwitchService.setCharacteristic(this.platform.Characteristic.ConfiguredName, 'Warm Mist');
     }
 
-    // Remove cached Lightbulb service from previous version if present
-    const oldLightbulb = this.accessory.getService(this.platform.Service.Lightbulb);
-    if (oldLightbulb) {
-      this.accessory.removeService(oldLightbulb);
+    // Remove cached color preset switches from previous version
+    for (const name of ['Red', 'Orange', 'Yellow', 'Green', 'Cyan', 'Blue', 'Purple', 'Pink']) {
+      const old = this.accessory.getServiceById(this.platform.Service.Switch, `RGBColor_${name}`);
+      if (old) {
+        this.accessory.removeService(old);
+      }
     }
 
-    // RGB color preset switches
-    for (const [name, color] of Object.entries(HumidifierAccessory.RGB_PRESETS)) {
-      const subtype = `RGBColor_${name}`;
-      const service = this.accessory.getServiceById(this.platform.Service.Switch, subtype) ||
-        this.accessory.addService(this.platform.Service.Switch, `Light: ${name}`, subtype);
-      service.setCharacteristic(this.platform.Characteristic.ConfiguredName, `Light: ${name}`);
-      service.getCharacteristic(this.platform.Characteristic.On)
-        .onGet(() => this.getColorPresetOn(name))
-        .onSet((value) => this.setColorPresetOn(name, value));
-      this.rgbColorSwitches.set(name, service);
+    // RGB Night Light — Lightbulb with Hue + Saturation, no Brightness/ColorTemperature
+    this.rgbLightService = this.accessory.getService(this.platform.Service.Lightbulb) ||
+      this.accessory.addService(this.platform.Service.Lightbulb, 'Night Light');
+    this.rgbLightService.setCharacteristic(this.platform.Characteristic.ConfiguredName, 'Night Light');
+    // Remove cached Brightness/ColorTemperature if present from earlier versions
+    const brightnessChar = this.rgbLightService.getCharacteristic(this.platform.Characteristic.Brightness);
+    if (brightnessChar) {
+      this.rgbLightService.removeCharacteristic(brightnessChar);
     }
+    const ctChar = this.rgbLightService.getCharacteristic(this.platform.Characteristic.ColorTemperature);
+    if (ctChar) {
+      this.rgbLightService.removeCharacteristic(ctChar);
+    }
+    this.rgbLightService.getCharacteristic(this.platform.Characteristic.On)
+      .onGet(this.getRGBLightOn.bind(this))
+      .onSet(this.setRGBLightOn.bind(this));
+    this.rgbLightService.getCharacteristic(this.platform.Characteristic.Hue)
+      .onGet(this.getRGBHue.bind(this))
+      .onSet(this.setRGBHue.bind(this));
+    this.rgbLightService.getCharacteristic(this.platform.Characteristic.Saturation)
+      .onGet(this.getRGBSaturation.bind(this))
+      .onSet(this.setRGBSaturation.bind(this));
 
     // ON / OFF
     // Register handlers for the Humidifier Active characteristic
@@ -462,64 +465,98 @@ export class HumidifierAccessory extends BaseAccessory {
     return this.on ? this.manualFogLevel : 0;
   }
 
-  // RGB color preset controls
-  private getColorPresetOn(name: string): boolean {
-    return parseInt(this.rgbLevel) > 0 && this.activeColorPreset === name;
+  // RGB Light control
+  getRGBLightOn(): boolean {
+    return parseInt(this.rgbLevel) > 0;
   }
 
-  private setColorPresetOn(name: string, value: unknown): void {
-    this.platform.log.debug('Triggered SET Color Preset %s: %s', name, value);
+  setRGBLightOn(value: unknown): void {
+    this.platform.log.debug('Triggered SET RGB Light On: %s', value);
     const on = Boolean(value);
     if (on) {
-      const color = HumidifierAccessory.RGB_PRESETS[name];
-      this.rgbColor = color;
-      this.activeColorPreset = name;
-      this.platform.webHelper.control(this.sn, { 'rgbcolor': color });
-      // Turn on the light if it's off
+      this.rgbLevel = '1';
+      // Send both rgblevel and current color to ensure light turns on with correct color
+      this.platform.webHelper.control(this.sn, { 'rgblevel': 1, 'rgbcolor': this.rgbColor });
+    } else {
+      this.rgbLevel = '0';
+      this.platform.webHelper.control(this.sn, { 'rgblevel': 0 });
+    }
+  }
+
+  getRGBHue(): number {
+    return this.rgbHue;
+  }
+
+  setRGBHue(value: unknown): void {
+    this.platform.log.debug('Triggered SET RGB Hue: %s', value);
+    this.rgbHue = Number(value);
+    this.debounceSendRGBColor();
+  }
+
+  getRGBSaturation(): number {
+    return this.rgbSaturation;
+  }
+
+  setRGBSaturation(value: unknown): void {
+    this.platform.log.debug('Triggered SET RGB Saturation: %s', value);
+    this.rgbSaturation = Number(value);
+    this.debounceSendRGBColor();
+  }
+
+  // Debounce color sends since HomeKit fires Hue and Saturation separately
+  private debounceSendRGBColor(): void {
+    if (this.rgbColorDebounce) {
+      clearTimeout(this.rgbColorDebounce);
+    }
+    this.rgbColorDebounce = setTimeout(() => {
+      this.rgbColor = HumidifierAccessory.hsToRgb(this.rgbHue, this.rgbSaturation);
+      this.platform.log.debug('Sending rgbcolor: 0x%s', this.rgbColor.toString(16).padStart(6, '0'));
+      // Turn on and set color in one command
       if (parseInt(this.rgbLevel) === 0) {
         this.rgbLevel = '1';
-        this.platform.webHelper.control(this.sn, { 'rgblevel': 1 });
+        this.rgbLightService.updateCharacteristic(this.platform.Characteristic.On, true);
       }
-      // Turn off other preset switches
-      this.updateColorPresetSwitches();
-    } else {
-      // Turning off the active preset turns off the light
-      this.rgbLevel = '0';
-      this.activeColorPreset = null;
-      this.platform.webHelper.control(this.sn, { 'rgblevel': 0 });
-      this.updateColorPresetSwitches();
-    }
+      this.platform.webHelper.control(this.sn, { 'rgblevel': 1, 'rgbcolor': this.rgbColor });
+    }, 100);
   }
 
-  private updateColorPresetSwitches(): void {
-    const lightOn = parseInt(this.rgbLevel) > 0;
-    for (const [name, service] of this.rgbColorSwitches) {
-      service.updateCharacteristic(
-        this.platform.Characteristic.On,
-        lightOn && this.activeColorPreset === name,
-      );
-    }
-  }
-
-  // Find which preset is closest to a given RGB value
-  private static findClosestPreset(rgb: number): string | null {
-    const r = (rgb >> 16) & 0xFF;
-    const g = (rgb >> 8) & 0xFF;
-    const b = rgb & 0xFF;
-    let closest: string | null = null;
-    let minDist = Infinity;
-    for (const [name, preset] of Object.entries(HumidifierAccessory.RGB_PRESETS)) {
-      const pr = (preset >> 16) & 0xFF;
-      const pg = (preset >> 8) & 0xFF;
-      const pb = preset & 0xFF;
-      const dist = (r - pr) ** 2 + (g - pg) ** 2 + (b - pb) ** 2;
-      if (dist < minDist) {
-        minDist = dist;
-        closest = name;
+  // RGB <-> HS conversions (value fixed at 1.0 — device has no brightness)
+  private static rgbToHS(rgb: number): [number, number] {
+    const r = ((rgb >> 16) & 0xFF) / 255;
+    const g = ((rgb >> 8) & 0xFF) / 255;
+    const b = (rgb & 0xFF) / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const d = max - min;
+    let h = 0;
+    const s = max === 0 ? 0 : (d / max) * 100;
+    if (d > 0) {
+      if (max === r) {
+        h = 60 * (((g - b) / d + 6) % 6);
+      } else if (max === g) {
+        h = 60 * ((b - r) / d + 2);
+      } else {
+        h = 60 * ((r - g) / d + 4);
       }
     }
-    // Only match if reasonably close (within ~30 per channel)
-    return minDist < 2700 ? closest : null;
+    return [Math.round(h), Math.round(s)];
+  }
+
+  private static hsToRgb(h: number, s: number): number {
+    const sat = s / 100;
+    const c = sat;  // v=1
+    const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+    const m = 1 - c;
+    let r = 0, g = 0, b = 0;
+    if (h < 60)       { r = c; g = x; }
+    else if (h < 120) { r = x; g = c; }
+    else if (h < 180) { g = c; b = x; }
+    else if (h < 240) { g = x; b = c; }
+    else if (h < 300) { r = x; b = c; }
+    else              { r = c; b = x; }
+    return (Math.round((r + m) * 255) << 16)
+         | (Math.round((g + m) * 255) << 8)
+         | Math.round((b + m) * 255);
   }
 
   private updateCurrentHumidifierState() {
@@ -628,16 +665,14 @@ export class HumidifierAccessory extends BaseAccessory {
       case 'rgblevel':
         this.rgbLevel = String(reported.rgblevel ?? this.rgbLevel);
         this.platform.log.debug('Humidifier rgblevel: %s', this.rgbLevel);
-        if (parseInt(this.rgbLevel) === 0) {
-          this.activeColorPreset = null;
-        }
-        this.updateColorPresetSwitches();
+        this.rgbLightService.updateCharacteristic(this.platform.Characteristic.On, this.getRGBLightOn());
         break;
       case 'rgbcolor':
         this.rgbColor = reported.rgbcolor ?? this.rgbColor;
-        this.activeColorPreset = HumidifierAccessory.findClosestPreset(this.rgbColor);
-        this.platform.log.debug('Humidifier rgbcolor: 0x%s -> preset: %s', this.rgbColor.toString(16).padStart(6, '0'), this.activeColorPreset);
-        this.updateColorPresetSwitches();
+        [this.rgbHue, this.rgbSaturation] = HumidifierAccessory.rgbToHS(this.rgbColor);
+        this.platform.log.debug('Humidifier rgbcolor: 0x%s -> H:%s S:%s', this.rgbColor.toString(16).padStart(6, '0'), this.rgbHue, this.rgbSaturation);
+        this.rgbLightService.updateCharacteristic(this.platform.Characteristic.Hue, this.rgbHue);
+        this.rgbLightService.updateCharacteristic(this.platform.Characteristic.Saturation, this.rgbSaturation);
         break;
       case 'filtertime':
         const filterLife = reported.filtertime ?? 100;

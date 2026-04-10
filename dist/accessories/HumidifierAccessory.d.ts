@@ -47,8 +47,7 @@ export declare class HumidifierAccessory extends BaseAccessory {
     private readonly humidityService;
     private readonly sleepSwitchService;
     private readonly hotFogSwitchService?;
-    private readonly rgbColorSwitches;
-    private static readonly RGB_PRESETS;
+    private readonly rgbLightService;
     private on;
     private dreoMode;
     private suspended;
@@ -57,7 +56,9 @@ export declare class HumidifierAccessory extends BaseAccessory {
     private ledLevel;
     private rgbLevel;
     private rgbColor;
-    private activeColorPreset;
+    private rgbHue;
+    private rgbSaturation;
+    private rgbColorDebounce;
     private wrong;
     private manualFogLevel;
     private targetHumAutoLevel;
@@ -81,10 +82,15 @@ export declare class HumidifierAccessory extends BaseAccessory {
     getTargetHumidity(): number;
     setTargetFogLevel(value: unknown): void;
     getTargetFogLevel(): number;
-    private getColorPresetOn;
-    private setColorPresetOn;
-    private updateColorPresetSwitches;
-    private static findClosestPreset;
+    getRGBLightOn(): boolean;
+    setRGBLightOn(value: unknown): void;
+    getRGBHue(): number;
+    setRGBHue(value: unknown): void;
+    getRGBSaturation(): number;
+    setRGBSaturation(value: unknown): void;
+    private debounceSendRGBColor;
+    private static rgbToHS;
+    private static hsToRgb;
     private updateCurrentHumidifierState;
     /**
      * 0 HomeKit: Auto - Dero: Manual (0)
