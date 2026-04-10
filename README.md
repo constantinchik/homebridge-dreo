@@ -54,6 +54,7 @@ Homebridge plugin for Dreo brand smart devices. [Dreo Fans on Amazon](https://ww
 
 #### Humidifiers
 * DR-HM713S
+* DR-HM735S (with RGB light support)
 
 Please open an issue if you have another model that works or doesn't work. If you have another device type and can help me test some code out I would definitely be open to adding support.
 
@@ -97,12 +98,28 @@ Please open an issue if you have another model that works or doesn't work. If yo
   * **Note**: Do not forget to rename this switch as HomeKit will name it as a `Switch` by default.
 * **Warm Mist:** This is a switch turns on the humidifier's `Warm Mist`. 
   * **Note**: Do not forget to rename this switch as HomeKit will name it as a `Switch` by default.
+* **RGB Light (HM735S):** Appears as a Lightbulb accessory with a color picker (Hue + Saturation). The device has no brightness control — only color selection. Color automations are not supported by Apple HomeKit; use saved scene presets as a workaround.
 
 #### Sensors
 * **Humidity Sensor:** Displays current humidity sensor reading.
 * **Water Level Sensor:** It's a binary sensor. Displays 100% if the Humidifier has any water in the tank. If no water, it will display 0%. Dero humidifiers do not have a water level sensor.
 
 ## Installation
+
+### From this fork (includes HM735S RGB support)
+
+```bash
+npm install -g github:constantinchik/homebridge-dreo
+```
+
+For Docker-based Homebridge:
+
+```bash
+docker exec homebridge npm install github:constantinchik/homebridge-dreo
+docker restart homebridge
+```
+
+### From npm (upstream, no RGB support)
 
 ```bash
 npm install -g homebridge-dreo
