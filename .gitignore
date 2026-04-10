@@ -1,5 +1,5 @@
 # Ignore compiled code
-dist
+# dist  # included in fork for direct GitHub install
 
 # ------------- Defaults ------------- #
 
@@ -86,7 +86,7 @@ web_modules/
 
 # Nuxt.js build / generate output
 .nuxt
-dist
+# dist  # included in fork for direct GitHub install
 
 # Gatsby files
 .cache/
